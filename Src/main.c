@@ -58,21 +58,15 @@ void gpio_init(void)
 void usart_init(void)
 {
     RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
-
-    USART1->BRR = 72000000 / 9600;
-
+    USART1->BRR = SystemCoreClock / 9600;
     USART1->CR1 =
-        USART_CR1_M |        // 9-bit
-        USART_CR1_RE |
-        USART_CR1_TE |
+        USART_CR1_M    |     // 9-bit
+        USART_CR1_RE   |
+        USART_CR1_TE   |
+        USART_CR1_WAKE |     // Wake on address
         USART_CR1_RXNEIE;
-
-    USART1->CR2 =
-        (node_id)       |    // Address
-        USART_CR1_WAKE;      // Wake on address
-
+    USART1->CR2 = (node_id); // Address
     USART1->CR1 |= USART_CR1_RWU; // start in mute mode
-
     USART1->CR1 |= USART_CR1_UE;
 
     NVIC_EnableIRQ(USART1_IRQn);
@@ -90,8 +84,6 @@ void usart_send_string(const char *s)
 {
     RS485_TX_EN();
 
-    USART1->CR1 &= ~USART_CR1_RWU; // exit mute
-
     while (*s)
         usart_send_char(*s++);
 
@@ -99,7 +91,7 @@ void usart_send_string(const char *s)
 
     RS485_TX_DIS();
 
-    USART1->CR1 |= USART_CR1_RWU; // back to mute
+    USART1->CR1 |= USART_CR1_RWU | USART_CR1_WAKE; // back to mute
 }
 
 /* ===== COMMAND HANDLER ===== */
@@ -132,10 +124,16 @@ void process_command(void)
 
 void USART1_IRQHandler(void)
 {
+    if(USART1->CR1 & USART_CR1_WAKE)
+    {
+        // Wake from mute mode, clear address flag
+        USART1->CR1 &= ~USART_CR1_WAKE;
+        (void)USART1->DR; // read DR to clear
+        return;
+    }
     if (USART1->SR & USART_SR_RXNE)
     {
         uint16_t data = USART1->DR;
-
         char c = (char)(data & 0xFF);
 
         if (c == '\n' || c == '\r')
