@@ -114,6 +114,15 @@ void process_command(void)
     {
         usart_send_string("TEMP=25.4,PIR=0,HUM=40,LUX=120\r\n");
     }
+    else if (strcmp((char*)rx_buffer, "LENKA") == 0)
+    {
+        usart_send_string("Pusztaiova\r\n");
+    }
+    else if (strcmp((char*)rx_buffer, "PARKSIDE") == 0)
+    {
+        usart_send_string("POHAR\r\n");
+    }
+    
     else
     {
         usart_send_string("ERR\r\n");
