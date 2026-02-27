@@ -5,7 +5,8 @@
 /* ===== CONFIG ===== */
 
 #define FLASH_ID_ADDRESS  0x0801FC00U
-#define DEFAULT_NODE_ID   0xF1
+// #define DEFAULT_NODE_ID   0xF1
+#define DEFAULT_NODE_ID   'A'
 
 #define RS485_TX_EN()     (GPIOB->BSRR = (1 << 8))
 #define RS485_TX_DIS()    (GPIOB->BRR  = (1 << 8))
@@ -17,6 +18,13 @@ volatile uint8_t node_id = DEFAULT_NODE_ID;
 #define RX_BUFFER_SIZE 64
 volatile char rx_buffer[RX_BUFFER_SIZE];
 volatile uint8_t rx_index = 0;
+
+static void gotToMuteMode(void)
+{
+    USART1->CR1 &= ~USART_CR1_UE; // disable USART to change mode
+    USART1->CR1 = (USART1->CR1 & ~USART_CR1_M) | USART_CR1_RWU | USART_CR1_WAKE;  // back to mute
+    USART1->CR1 |= USART_CR1_UE;
+}
 
 /* ===== FLASH ID READ ===== */
 
@@ -60,7 +68,7 @@ void usartInit(void)
     RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
     USART1->BRR = SystemCoreClock / 9600;
     USART1->CR1 =
-        USART_CR1_M    |     // 9-bit
+        // USART_CR1_M    |     // 9-bit
         USART_CR1_PCE  |     // Parity enable
         USART_CR1_RE   |
         USART_CR1_TE   |
@@ -92,38 +100,38 @@ void usartSendString(const char *s)
 
     RS485_TX_DIS();
 
-    USART1->CR1 |= USART_CR1_RWU | USART_CR1_WAKE; // back to mute
+    // USART1->CR1 |= USART_CR1_RWU | USART_CR1_WAKE; // back to mute
+    gotToMuteMode();
 }
 
 /* ===== COMMAND HANDLER ===== */
 
 void processCommand(void)
 {
-    if (strcmp((char*)rx_buffer, "PING") == 0)
+    if (strcmp((char*)&rx_buffer[1u], "PING") == 0)
     {
         usartSendString("PONG\r\n");
     }
-    else if (strcmp((char*)rx_buffer, "TEMP") == 0)
+    else if (strcmp((char*)&rx_buffer[1u], "TEMP") == 0)
     {
         usartSendString("TEMP=25.4\r\n");
     }
-    else if (strcmp((char*)rx_buffer, "PIR") == 0)
+    else if (strcmp((char*)&rx_buffer[1u], "PIR") == 0)
     {
         usartSendString("PIR=0\r\n");
     }
-    else if (strcmp((char*)rx_buffer, "ALL") == 0)
+    else if (strcmp((char*)&rx_buffer[1u], "ALL") == 0)
     {
         usartSendString("TEMP=25.4,PIR=0,HUM=40,LUX=120\r\n");
     }
-    else if (strcmp((char*)rx_buffer, "LENKA") == 0)
+    else if (strcmp((char*)&rx_buffer[1u], "LENKA") == 0)
     {
         usartSendString("Pusztaiova\r\n");
     }
-    else if (strcmp((char*)rx_buffer, "PARKSIDE") == 0)
+    else if (strcmp((char*)&rx_buffer[1u], "PARKSIDE") == 0)
     {
         usartSendString("POHAR\r\n");
     }
-    
     else
     {
         usartSendString("ERR\r\n");
@@ -137,7 +145,10 @@ void USART1_IRQHandler(void)
     if(USART1->CR1 & USART_CR1_WAKE)
     {
         // Wake from mute mode, clear address flag
-        USART1->CR1 &= ~USART_CR1_WAKE;
+        // USART1->CR1 &= ~USART_CR1_WAKE;
+        USART1->CR1 &= ~USART_CR1_UE; // disable USART to change mode
+        USART1->CR1 = (USART1->CR1 & ~USART_CR1_WAKE) | USART_CR1_M;
+        USART1->CR1 |= USART_CR1_UE;
         (void)USART1->DR; // read DR to clear
         return;
     }
@@ -154,13 +165,14 @@ void USART1_IRQHandler(void)
         }
         else
         {
-            if(rx_index == 0 && (data != DEFAULT_NODE_ID))
+            if((rx_index == 0) && (data != DEFAULT_NODE_ID))
             {
                 // First byte must have address bit set
-                USART1->CR1 |= USART_CR1_RWU | USART_CR1_WAKE; // back to mute
+                // USART1->CR1 |= USART_CR1_RWU | USART_CR1_WAKE; // back to mute
+                gotToMuteMode();
                 return;
             }
-            else if (rx_index < RX_BUFFER_SIZE - 1)
+            else if ((rx_index < RX_BUFFER_SIZE - 1) && (c != '\r'))
                 rx_buffer[rx_index++] = c;
         }
     }
