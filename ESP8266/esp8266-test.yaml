@@ -1,0 +1,97 @@
+esphome:
+  name: esp8266-test
+  friendly_name: ESP8266_test
+  on_boot:
+    then:
+      - script.execute: init_nodes
+#  includes:
+#    - rs485_master.h
+
+esp8266:
+  board: nodemcuv2
+  #  board: esp01_1m
+
+# Enable logging
+logger:
+  baud_rate: 0
+  # vypne debug:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "qHqfBYQW2ONFEEkGiYb+daiv6Sl1O0pnRBWi+dj0vX0="
+
+ota:
+  - platform: esphome
+    password: "a6193a3b166275bf0ecbd564b1247ddf"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  min_auth_mode: WPA2
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Esp8266-Test Fallback Hotspot"
+    password: "15Maj_21Pal"
+
+captive_portal:
+
+# Vstavaná LED na GPIO1 (TX) alebo GPIO2 (ak je dostupné)
+output:
+  - platform: esp8266_pwm
+    pin:
+      number: GPIO2
+      inverted: true
+    id: led_pwm
+    frequency: 1000 Hz
+  - platform: gpio
+    pin: GPIO15
+    id: led_builtin
+
+light:
+  - platform: binary
+    name: "ESP01 LED"
+    output: led_builtin
+  - platform: monochromatic
+    name: "ESP01 PWM LED"
+    output: led_pwm
+
+# NEW CODE FOR RS485
+external_components:
+  - source:
+      type: local
+      path: custom_components
+
+uart:
+  id: rs485_uart
+  tx_pin: GPIO1
+  rx_pin: GPIO3
+  baud_rate: 9600
+  parity: EVEN
+
+rs485_bus:
+  id: mybus
+  uart_id: rs485_uart
+  de_pin: GPIO14
+
+sensor:
+  - platform: rs485_bus
+    name: "STM1 Temperature"
+    bus_id: mybus
+    address: 1
+
+binary_sensor:
+  - platform: rs485_bus
+    name: "STM1 PIR"
+    bus_id: mybus
+    address: 1
+
+#{1,2,3,4,5} namiesto {1} pre 5 nodov
+script:
+  - id: init_nodes
+    then:
+      lambda: |-
+        std::vector<uint8_t> nodes = {1};
+        id(mybus)->set_nodes(nodes);
+

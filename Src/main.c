@@ -157,7 +157,7 @@ void USART1_IRQHandler(void)
         uint16_t data = USART1->DR;
         char c = (char)(data & 0xFF);
 
-        if (c == '\n' || c == '\r')
+        if (c == '\n')
         {
             rx_buffer[rx_index] = 0;
             processCommand();
