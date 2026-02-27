@@ -112,6 +112,13 @@ void RS485Bus::poll_once_() {
     if (now - last_request_ms_ < RESPONSE_TIMEOUT_MS)
       return;
 
+    if (waiting_for_pong_) {
+      waiting_for_pong_ = false;
+      if (pong_status_sensor_ != nullptr)
+        pong_status_sensor_->publish_state(false);
+      ESP_LOGW(TAG, "PING timeout - no PONG received");
+    }
+
     waiting_for_response_ = false;
     ESP_LOGV(TAG, "Response timeout (%ums), continuing with next request", RESPONSE_TIMEOUT_MS);
   }
@@ -120,6 +127,7 @@ void RS485Bus::poll_once_() {
     this->send_ping_();
     last_request_ms_ = now;
     waiting_for_response_ = true;
+    waiting_for_pong_ = true;
     send_ping_next_ = false;
     return;
   }
@@ -158,6 +166,9 @@ void RS485Bus::parse_ascii_byte_(uint8_t byte) {
 
   if (pong_window_[0] == 'P' && pong_window_[1] == 'O' && pong_window_[2] == 'N' && pong_window_[3] == 'G') {
     waiting_for_response_ = false;
+    waiting_for_pong_ = false;
+    if (pong_status_sensor_ != nullptr)
+      pong_status_sensor_->publish_state(true);
     ESP_LOGI(TAG, "RX ASCII PONG");
   }
 }

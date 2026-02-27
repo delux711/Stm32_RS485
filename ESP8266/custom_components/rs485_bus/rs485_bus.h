@@ -24,6 +24,7 @@ class RS485Bus : public Component, public uart::UARTDevice {
   void register_temperature_sensor(uint8_t addr, sensor::Sensor *s);
   void register_humidity_sensor(uint8_t addr, sensor::Sensor *s);
   void register_pir_sensor(uint8_t addr, binary_sensor::BinarySensor *s);
+  void set_pong_status_sensor(binary_sensor::BinarySensor *s) { pong_status_sensor_ = s; }
   void set_poll_interval(uint32_t interval_ms) { poll_interval_ms_ = interval_ms; }
 
   void set_nodes(const std::vector<uint8_t> &nodes) {
@@ -35,6 +36,7 @@ class RS485Bus : public Component, public uart::UARTDevice {
   uint32_t poll_interval_ms_{1000};
   uint32_t last_request_ms_{0};
   bool waiting_for_response_{false};
+  bool waiting_for_pong_{false};
   bool send_ping_next_{true};
   size_t poll_node_index_{0};
   size_t poll_cmd_index_{0};
@@ -56,6 +58,7 @@ class RS485Bus : public Component, public uart::UARTDevice {
   std::map<uint8_t, sensor::Sensor *> temp_sensors_;
   std::map<uint8_t, sensor::Sensor *> hum_sensors_;
   std::map<uint8_t, binary_sensor::BinarySensor *> pir_sensors_;
+  binary_sensor::BinarySensor *pong_status_sensor_{nullptr};
 
   void parse_byte_(uint8_t byte);
 };
