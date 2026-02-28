@@ -81,13 +81,13 @@ sensor:
   - platform: rs485_bus
     name: "STM1 Temperature"
     bus_id: mybus
-    address: 1
+    address: 0xF1
 
 binary_sensor:
   - platform: rs485_bus
     name: "STM1 PIR"
     bus_id: mybus
-    address: 1
+    address: 0xF1
 
 switch:
   - platform: rs485_bus
@@ -99,6 +99,6 @@ script:
   - id: init_nodes
     then:
       lambda: |-
-        std::vector<uint8_t> nodes = {1,2};
+        std::vector<uint8_t> nodes = {0xF1};
         id(mybus)->set_nodes(nodes);
 

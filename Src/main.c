@@ -5,21 +5,20 @@
 /* ===== CONFIG ===== */
 
 #define FLASH_ID_ADDRESS  0x0801FC00U
-// #define DEFAULT_NODE_ID   0xF1
-#define DEFAULT_NODE_ID   'A'
+#define DEFAULT_NODE_ID   0xF1u
 
 #define RS485_TX_EN()     (GPIOB->BSRR = (1 << 8))
 #define RS485_TX_DIS()    (GPIOB->BRR  = (1 << 8))
 
 /* ===== GLOBAL ===== */
 
-volatile uint8_t node_id = DEFAULT_NODE_ID;
+static uint8_t node_id = DEFAULT_NODE_ID;
 
 #define RX_BUFFER_SIZE 64
-volatile char rx_buffer[RX_BUFFER_SIZE];
+volatile uint8_t rx_buffer[RX_BUFFER_SIZE];
 volatile uint8_t rx_index = 0;
 
-static void gotToMuteMode(void)
+static void goToMuteMode(void)
 {
     USART1->CR1 &= ~USART_CR1_UE; // disable USART to change mode
     USART1->CR1 = (USART1->CR1 & ~USART_CR1_M) | USART_CR1_RWU | USART_CR1_WAKE;  // back to mute
@@ -101,7 +100,7 @@ void usartSendString(const char *s)
     RS485_TX_DIS();
 
     // USART1->CR1 |= USART_CR1_RWU | USART_CR1_WAKE; // back to mute
-    gotToMuteMode();
+    goToMuteMode();
 }
 
 /* ===== COMMAND HANDLER ===== */
@@ -155,7 +154,7 @@ void USART1_IRQHandler(void)
     if (USART1->SR & USART_SR_RXNE)
     {
         uint16_t data = USART1->DR;
-        char c = (char)(data & 0xFF);
+        uint8_t c = (uint8_t)(data & 0xFF);
 
         if (c == '\n')
         {
@@ -165,16 +164,23 @@ void USART1_IRQHandler(void)
         }
         else
         {
-            if((rx_index == 0) && (data != DEFAULT_NODE_ID))
+            if((rx_index == 0) && (c != node_id)) // first byte is address, must match node_id
             {
                 // First byte must have address bit set
                 // USART1->CR1 |= USART_CR1_RWU | USART_CR1_WAKE; // back to mute
-                gotToMuteMode();
+                goToMuteMode();
                 return;
             }
             else if ((rx_index < RX_BUFFER_SIZE - 1) && (c != '\r'))
                 rx_buffer[rx_index++] = c;
         }
+    }
+    if (USART1->SR & (USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE))
+    {
+        (void)USART1->SR; // clear error flags
+        (void)USART1->DR;
+        goToMuteMode();
+        return;
     }
 }
 

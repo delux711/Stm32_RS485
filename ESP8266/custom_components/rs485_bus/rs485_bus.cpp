@@ -1,5 +1,6 @@
 #include "rs485_bus.h"
 #include <algorithm>
+#include <cstdlib>
 #include "esphome/core/log.h"
 
 namespace esphome {
@@ -10,7 +11,8 @@ static constexpr uint8_t FRAME_START = 0xAA;
 static constexpr uint8_t MAX_LEN = 64;
 static constexpr uint32_t RESPONSE_TIMEOUT_MS = 100;
 static constexpr bool REQUIRE_CHECKSUM = false;
-static constexpr uint8_t POLL_COMMANDS[] = {0x01, 0x02, 0x03};
+static constexpr const char *const POLL_COMMANDS[] = {"TEMP", "PIR", "ALL", "PING"};
+static constexpr size_t POLL_COMMAND_COUNT = sizeof(POLL_COMMANDS) / sizeof(POLL_COMMANDS[0]);
 
 RS485Bus::RS485Bus(uart::UARTComponent *parent, GPIOPin *de_pin)
     : uart::UARTDevice(parent), de_pin_(de_pin) {}
@@ -82,14 +84,15 @@ std::vector<uint8_t> RS485Bus::build_poll_nodes_() const {
   return result;
 }
 
-void RS485Bus::send_poll_frame_(uint8_t addr, uint8_t cmd) {
-  const std::vector<uint8_t> frame = {
-      FRAME_START,
-      addr,
-      0x02,
-      cmd,
-      0x00,
-  };
+void RS485Bus::send_ascii_command_(uint8_t addr, const char *cmd) {
+  std::vector<uint8_t> frame;
+  frame.reserve(2 + std::char_traits<char>::length(cmd) + 2);
+  frame.push_back(static_cast<uint8_t>(addr & 0xFF));
+  frame.push_back(addr);
+  for (size_t index = 0; cmd[index] != '\0'; index++)
+    frame.push_back(static_cast<uint8_t>(cmd[index]));
+  frame.push_back('\r');
+  frame.push_back('\n');
 
   if (de_pin_ != nullptr)
     de_pin_->digital_write(true);
@@ -100,22 +103,11 @@ void RS485Bus::send_poll_frame_(uint8_t addr, uint8_t cmd) {
   if (de_pin_ != nullptr)
     de_pin_->digital_write(false);
 
-  ESP_LOGV(TAG, "TX poll frame addr=%u cmd=0x%02X", addr, cmd);
+  ESP_LOGV(TAG, "TX ASCII cmd a0=0x%02X a1=0x%02X cmd=%s", static_cast<uint8_t>(addr & 0xFF), addr, cmd);
 }
 
-void RS485Bus::send_ping_() {
-  static const uint8_t ping[] = {'A', 'A', 'P', 'I', 'N', 'G', '\r', '\n'};
-
-  if (de_pin_ != nullptr)
-    de_pin_->digital_write(true);
-
-  this->write_array(ping, sizeof(ping));
-  this->flush();
-
-  if (de_pin_ != nullptr)
-    de_pin_->digital_write(false);
-
-  ESP_LOGV(TAG, "TX ASCII PING");
+void RS485Bus::send_ping_(uint8_t addr) {
+  this->send_ascii_command_(addr, "PING");
 }
 
 void RS485Bus::poll_once_() {
@@ -135,8 +127,18 @@ void RS485Bus::poll_once_() {
     ESP_LOGV(TAG, "Response timeout (%ums), continuing with next request", RESPONSE_TIMEOUT_MS);
   }
 
+  const auto poll_nodes = this->build_poll_nodes_();
+
   if (ping_enabled_ && send_ping_next_) {
-    this->send_ping_();
+    uint8_t ping_addr = 0;
+    if (!poll_nodes.empty()) {
+      if (poll_node_index_ >= poll_nodes.size())
+        poll_node_index_ = 0;
+      ping_addr = poll_nodes[poll_node_index_];
+    }
+
+    this->send_ping_(ping_addr);
+    active_request_addr_ = ping_addr;
     last_request_ms_ = now;
     waiting_for_response_ = true;
     waiting_for_pong_ = true;
@@ -144,7 +146,6 @@ void RS485Bus::poll_once_() {
     return;
   }
 
-  const auto poll_nodes = this->build_poll_nodes_();
   if (poll_nodes.empty()) {
     send_ping_next_ = ping_enabled_;
     return;
@@ -153,36 +154,136 @@ void RS485Bus::poll_once_() {
   if (poll_node_index_ >= poll_nodes.size())
     poll_node_index_ = 0;
 
-  if (poll_cmd_index_ >= sizeof(POLL_COMMANDS))
+  if (poll_cmd_index_ >= POLL_COMMAND_COUNT)
     poll_cmd_index_ = 0;
 
   const uint8_t addr = poll_nodes[poll_node_index_];
-  const uint8_t cmd = POLL_COMMANDS[poll_cmd_index_];
-  this->send_poll_frame_(addr, cmd);
+  const char *cmd = POLL_COMMANDS[poll_cmd_index_];
+  this->send_ascii_command_(addr, cmd);
+  active_request_addr_ = addr;
   last_request_ms_ = now;
   waiting_for_response_ = true;
   send_ping_next_ = ping_enabled_;
 
   poll_cmd_index_++;
-  if (poll_cmd_index_ >= sizeof(POLL_COMMANDS)) {
+  if (poll_cmd_index_ >= POLL_COMMAND_COUNT) {
     poll_cmd_index_ = 0;
     poll_node_index_++;
   }
 }
 
 void RS485Bus::parse_ascii_byte_(uint8_t byte) {
-  pong_window_[0] = pong_window_[1];
-  pong_window_[1] = pong_window_[2];
-  pong_window_[2] = pong_window_[3];
-  pong_window_[3] = byte;
+  if (byte == '\r')
+    return;
 
-  if (waiting_for_pong_ && pong_window_[0] == 'P' && pong_window_[1] == 'O' && pong_window_[2] == 'N' && pong_window_[3] == 'G') {
+  if (byte == '\n') {
+    if (!ascii_line_buffer_.empty()) {
+      this->parse_ascii_line_(ascii_line_buffer_);
+      ascii_line_buffer_.clear();
+    }
+    return;
+  }
+
+  if (ascii_line_buffer_.size() >= MAX_LEN) {
+    ascii_line_buffer_.clear();
+    ESP_LOGW(TAG, "ASCII response too long, dropping line");
+    return;
+  }
+
+  ascii_line_buffer_.push_back(static_cast<char>(byte));
+}
+
+void RS485Bus::parse_ascii_line_(const std::string &line) {
+  if (line == "PONG") {
     waiting_for_response_ = false;
     waiting_for_pong_ = false;
     if (pong_status_sensor_ != nullptr)
       pong_status_sensor_->publish_state(true);
     ESP_LOGI(TAG, "RX ASCII PONG");
+    return;
   }
+
+  waiting_for_response_ = false;
+
+  size_t token_start = 0;
+  while (token_start < line.size()) {
+    const size_t token_end = line.find(',', token_start);
+    const size_t token_len = (token_end == std::string::npos) ? (line.size() - token_start) : (token_end - token_start);
+    const std::string token = line.substr(token_start, token_len);
+
+    const size_t equals_pos = token.find('=');
+    if (equals_pos != std::string::npos && equals_pos > 0 && equals_pos + 1 < token.size()) {
+      const std::string key = token.substr(0, equals_pos);
+      const std::string value = token.substr(equals_pos + 1);
+      this->publish_key_value_(active_request_addr_, key, value);
+    }
+
+    if (token_end == std::string::npos)
+      break;
+    token_start = token_end + 1;
+  }
+}
+
+void RS485Bus::publish_key_value_(uint8_t addr, const std::string &key, const std::string &value) {
+  if (key == "TEMP") {
+    auto sensor_it = temp_sensors_.find(addr);
+    if (sensor_it != temp_sensors_.end()) {
+      float temp = 0.0f;
+      if (parse_float_(value, &temp))
+        sensor_it->second->publish_state(temp);
+    }
+    return;
+  }
+
+  if (key == "HUM") {
+    auto sensor_it = hum_sensors_.find(addr);
+    if (sensor_it != hum_sensors_.end()) {
+      float hum = 0.0f;
+      if (parse_float_(value, &hum))
+        sensor_it->second->publish_state(hum);
+    }
+    return;
+  }
+
+  if (key == "PIR") {
+    auto sensor_it = pir_sensors_.find(addr);
+    if (sensor_it != pir_sensors_.end()) {
+      bool pir = false;
+      if (parse_bool_(value, &pir))
+        sensor_it->second->publish_state(pir);
+    }
+    return;
+  }
+}
+
+bool RS485Bus::parse_float_(const std::string &value, float *out) const {
+  if (out == nullptr)
+    return false;
+
+  char *end = nullptr;
+  const float parsed = std::strtof(value.c_str(), &end);
+  if (end == value.c_str() || *end != '\0')
+    return false;
+
+  *out = parsed;
+  return true;
+}
+
+bool RS485Bus::parse_bool_(const std::string &value, bool *out) const {
+  if (out == nullptr)
+    return false;
+
+  if (value == "1" || value == "ON" || value == "TRUE") {
+    *out = true;
+    return true;
+  }
+
+  if (value == "0" || value == "OFF" || value == "FALSE") {
+    *out = false;
+    return true;
+  }
+
+  return false;
 }
 
 bool RS485Bus::is_allowed_node_(uint8_t addr) const {
@@ -209,71 +310,6 @@ bool RS485Bus::validate_checksum_(const std::vector<uint8_t> &frame) const {
 
 void RS485Bus::parse_byte_(uint8_t byte) {
   this->parse_ascii_byte_(byte);
-  rx_buffer_.push_back(byte);
-
-  while (!rx_buffer_.empty()) {
-    if (rx_buffer_[0] != FRAME_START) {
-      rx_buffer_.erase(rx_buffer_.begin());
-      continue;
-    }
-
-    if (rx_buffer_.size() < 4)
-      return;
-
-    const uint8_t len = rx_buffer_[2];
-    if (len < 2 || len > MAX_LEN) {
-      ESP_LOGW(TAG, "Invalid frame len=%u, dropping start byte", len);
-      rx_buffer_.erase(rx_buffer_.begin());
-      continue;
-    }
-
-    const size_t frame_size = static_cast<size_t>(len) + 3;
-    if (rx_buffer_.size() < frame_size)
-      return;
-
-    const std::vector<uint8_t> frame(rx_buffer_.begin(), rx_buffer_.begin() + frame_size);
-
-    if (REQUIRE_CHECKSUM && !validate_checksum_(frame)) {
-      ESP_LOGW(TAG, "Checksum mismatch, frame dropped");
-      rx_buffer_.erase(rx_buffer_.begin());
-      continue;
-    }
-
-    const uint8_t addr = frame[1];
-    const uint8_t cmd = frame[3];
-
-    if (!is_allowed_node_(addr)) {
-      rx_buffer_.erase(rx_buffer_.begin(), rx_buffer_.begin() + frame_size);
-      continue;
-    }
-
-    waiting_for_response_ = false;
-
-    if (cmd == 0x01 && frame_size >= 6) {
-      auto sensor_it = temp_sensors_.find(addr);
-      if (sensor_it != temp_sensors_.end()) {
-        const float temp = (static_cast<uint16_t>(frame[4]) << 8 | frame[5]) / 100.0f;
-        sensor_it->second->publish_state(temp);
-      }
-    }
-
-    if (cmd == 0x02 && frame_size >= 6) {
-      auto sensor_it = hum_sensors_.find(addr);
-      if (sensor_it != hum_sensors_.end()) {
-        const float hum = (static_cast<uint16_t>(frame[4]) << 8 | frame[5]) / 100.0f;
-        sensor_it->second->publish_state(hum);
-      }
-    }
-
-    if (cmd == 0x03 && frame_size >= 5) {
-      auto sensor_it = pir_sensors_.find(addr);
-      if (sensor_it != pir_sensors_.end()) {
-        sensor_it->second->publish_state(frame[4] != 0);
-      }
-    }
-
-    rx_buffer_.erase(rx_buffer_.begin(), rx_buffer_.begin() + frame_size);
-  }
 }
 
 void RS485PingSwitch::write_state(bool state) {

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <array>
 #include <map>
+#include <string>
 #include <vector>
 #include "esphome/core/component.h"
 #include "esphome/components/uart/uart.h"
@@ -46,13 +47,19 @@ class RS485Bus : public Component, public uart::UARTDevice {
   bool ping_enabled_{true};
   size_t poll_node_index_{0};
   size_t poll_cmd_index_{0};
+  uint8_t active_request_addr_{0};
   std::array<uint8_t, 4> pong_window_{{0, 0, 0, 0}};
+  std::string ascii_line_buffer_;
 
   void poll_once_();
-  void send_poll_frame_(uint8_t addr, uint8_t cmd);
-  void send_ping_();
+  void send_ascii_command_(uint8_t addr, const char *cmd);
+  void send_ping_(uint8_t addr);
   std::vector<uint8_t> build_poll_nodes_() const;
   void parse_ascii_byte_(uint8_t byte);
+  void parse_ascii_line_(const std::string &line);
+  void publish_key_value_(uint8_t addr, const std::string &key, const std::string &value);
+  bool parse_float_(const std::string &value, float *out) const;
+  bool parse_bool_(const std::string &value, bool *out) const;
 
   bool is_allowed_node_(uint8_t addr) const;
   bool validate_checksum_(const std::vector<uint8_t> &frame) const;
