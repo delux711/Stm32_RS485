@@ -74,6 +74,8 @@ rs485_bus:
   id: mybus
   uart_id: rs485_uart
   de_pin: GPIO14
+  pong_status:
+    name: "RS485 PONG"
 
 sensor:
   - platform: rs485_bus
@@ -87,11 +89,16 @@ binary_sensor:
     bus_id: mybus
     address: 1
 
+switch:
+  - platform: rs485_bus
+    name: "RS485 PING Enabled"
+    bus_id: mybus
+
 #{1,2,3,4,5} namiesto {1} pre 5 nodov
 script:
   - id: init_nodes
     then:
       lambda: |-
-        std::vector<uint8_t> nodes = {1};
+        std::vector<uint8_t> nodes = {1,2};
         id(mybus)->set_nodes(nodes);
 

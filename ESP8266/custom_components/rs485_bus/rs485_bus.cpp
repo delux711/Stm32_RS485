@@ -47,6 +47,18 @@ void RS485Bus::register_pir_sensor(uint8_t addr, binary_sensor::BinarySensor *s)
   pir_sensors_[addr] = s;
 }
 
+void RS485Bus::set_ping_enabled(bool enabled) {
+  ping_enabled_ = enabled;
+
+  if (!enabled) {
+    if (waiting_for_pong_)
+      waiting_for_response_ = false;
+    waiting_for_pong_ = false;
+    if (pong_status_sensor_ != nullptr)
+      pong_status_sensor_->publish_state(false);
+  }
+}
+
 std::vector<uint8_t> RS485Bus::build_poll_nodes_() const {
   if (!nodes_.empty())
     return nodes_;
@@ -123,7 +135,7 @@ void RS485Bus::poll_once_() {
     ESP_LOGV(TAG, "Response timeout (%ums), continuing with next request", RESPONSE_TIMEOUT_MS);
   }
 
-  if (send_ping_next_) {
+  if (ping_enabled_ && send_ping_next_) {
     this->send_ping_();
     last_request_ms_ = now;
     waiting_for_response_ = true;
@@ -134,7 +146,7 @@ void RS485Bus::poll_once_() {
 
   const auto poll_nodes = this->build_poll_nodes_();
   if (poll_nodes.empty()) {
-    send_ping_next_ = true;
+    send_ping_next_ = ping_enabled_;
     return;
   }
 
@@ -149,7 +161,7 @@ void RS485Bus::poll_once_() {
   this->send_poll_frame_(addr, cmd);
   last_request_ms_ = now;
   waiting_for_response_ = true;
-  send_ping_next_ = true;
+  send_ping_next_ = ping_enabled_;
 
   poll_cmd_index_++;
   if (poll_cmd_index_ >= sizeof(POLL_COMMANDS)) {
@@ -164,7 +176,7 @@ void RS485Bus::parse_ascii_byte_(uint8_t byte) {
   pong_window_[2] = pong_window_[3];
   pong_window_[3] = byte;
 
-  if (pong_window_[0] == 'P' && pong_window_[1] == 'O' && pong_window_[2] == 'N' && pong_window_[3] == 'G') {
+  if (waiting_for_pong_ && pong_window_[0] == 'P' && pong_window_[1] == 'O' && pong_window_[2] == 'N' && pong_window_[3] == 'G') {
     waiting_for_response_ = false;
     waiting_for_pong_ = false;
     if (pong_status_sensor_ != nullptr)
@@ -262,6 +274,20 @@ void RS485Bus::parse_byte_(uint8_t byte) {
 
     rx_buffer_.erase(rx_buffer_.begin(), rx_buffer_.begin() + frame_size);
   }
+}
+
+void RS485PingSwitch::write_state(bool state) {
+  if (bus_ != nullptr)
+    bus_->set_ping_enabled(state);
+  publish_state(state);
+}
+
+void RS485PingSwitch::setup() {
+  if (bus_ != nullptr) {
+    publish_state(bus_->is_ping_enabled());
+    return;
+  }
+  publish_state(true);
 }
 
 }  // namespace rs485_bus

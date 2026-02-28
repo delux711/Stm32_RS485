@@ -10,9 +10,12 @@
 #include "esphome/core/gpio.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
+#include "esphome/components/switch/switch.h"
 
 namespace esphome {
 namespace rs485_bus {
+
+class RS485PingSwitch;
 
 class RS485Bus : public Component, public uart::UARTDevice {
  public:
@@ -26,6 +29,8 @@ class RS485Bus : public Component, public uart::UARTDevice {
   void register_pir_sensor(uint8_t addr, binary_sensor::BinarySensor *s);
   void set_pong_status_sensor(binary_sensor::BinarySensor *s) { pong_status_sensor_ = s; }
   void set_poll_interval(uint32_t interval_ms) { poll_interval_ms_ = interval_ms; }
+  void set_ping_enabled(bool enabled);
+  bool is_ping_enabled() const { return ping_enabled_; }
 
   void set_nodes(const std::vector<uint8_t> &nodes) {
     nodes_ = nodes;
@@ -38,6 +43,7 @@ class RS485Bus : public Component, public uart::UARTDevice {
   bool waiting_for_response_{false};
   bool waiting_for_pong_{false};
   bool send_ping_next_{true};
+  bool ping_enabled_{true};
   size_t poll_node_index_{0};
   size_t poll_cmd_index_{0};
   std::array<uint8_t, 4> pong_window_{{0, 0, 0, 0}};
@@ -61,6 +67,18 @@ class RS485Bus : public Component, public uart::UARTDevice {
   binary_sensor::BinarySensor *pong_status_sensor_{nullptr};
 
   void parse_byte_(uint8_t byte);
+};
+
+class RS485PingSwitch : public switch_::Switch, public Component {
+ public:
+  void set_bus(RS485Bus *bus) { bus_ = bus; }
+  void setup() override;
+
+ protected:
+  void write_state(bool state) override;
+
+ private:
+  RS485Bus *bus_{nullptr};
 };
 
 }  // namespace rs485_bus
