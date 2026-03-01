@@ -1,0 +1,18 @@
+{
+	"folders": [
+		{
+			"path": "/opt/esphome"
+		}
+	],
+	"settings": {
+		"files.exclude": {
+			"**/.esphome": true,
+			"**/__pycache__": true
+		},
+		"search.exclude": {
+			"**/.esphome": true,
+			"**/__pycache__": true
+		}
+	}
+ }
+ 

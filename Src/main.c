@@ -1,22 +1,36 @@
 #include <stm32f10x.h>
 #include "system_stm32f10x.h"
 #include <string.h>
+#include <stdbool.h>
 
 /* ===== CONFIG ===== */
 
-#define FLASH_ID_ADDRESS  0x0801FC00U
-#define DEFAULT_NODE_ID   0xF1u
+#define FLASH_ID_ADDRESS  (0x0801FC00u)
+#define DEFAULT_NODE_ID   (0xF1u)
 
+#define DELAY_RESPONSE_MS (3u)
 #define RS485_TX_EN()     (GPIOB->BSRR = (1 << 8))
 #define RS485_TX_DIS()    (GPIOB->BRR  = (1 << 8))
 
 /* ===== GLOBAL ===== */
-
+static uint8_t readNodeId(void);
 static uint8_t node_id = DEFAULT_NODE_ID;
 
 #define RX_BUFFER_SIZE 64
 volatile uint8_t rx_buffer[RX_BUFFER_SIZE];
-volatile uint8_t rx_index = 0;
+volatile uint8_t rx_index = 0u;
+volatile uint32_t ms_ticks = 0u;
+volatile uint32_t command_due_tick = 0u;
+volatile bool command_pending = false;
+
+static void initGlobalVariables(void)
+{
+    node_id = readNodeId();
+    rx_index = 0;
+    ms_ticks = 0;
+    command_due_tick = 0;
+    command_pending = false;
+}
 
 static void goToMuteMode(void)
 {
@@ -26,8 +40,7 @@ static void goToMuteMode(void)
 }
 
 /* ===== FLASH ID READ ===== */
-
-uint8_t readNodeId(void)
+static uint8_t readNodeId(void)
 {
     uint8_t id = *(volatile uint8_t*)FLASH_ID_ADDRESS;
 
@@ -82,13 +95,13 @@ void usartInit(void)
 
 /* ===== SEND FUNCTION ===== */
 
-void usartSendChar(char c)
+static void usartSendChar(char c)
 {
     while (!(USART1->SR & USART_SR_TXE));
     USART1->DR = c;
 }
 
-void usartSendString(const char *s)
+static void usartSendString(const char *s)
 {
     RS485_TX_EN();
 
@@ -156,11 +169,16 @@ void USART1_IRQHandler(void)
         uint16_t data = USART1->DR;
         uint8_t c = (uint8_t)(data & 0xFF);
 
+        if (command_pending)
+        {
+            return;
+        }
+
         if (c == '\n')
         {
             rx_buffer[rx_index] = 0;
-            processCommand();
-            rx_index = 0;
+            command_due_tick = ms_ticks + DELAY_RESPONSE_MS;
+            command_pending = true;
         }
         else
         {
@@ -184,6 +202,11 @@ void USART1_IRQHandler(void)
     }
 }
 
+void SysTick_Handler(void)
+{
+    ms_ticks++;
+}
+
 /* ===== MAIN ===== */
 
 int main(void)
@@ -191,13 +214,21 @@ int main(void)
     SystemInit();
     SystemCoreClockUpdate();
 
-    node_id = readNodeId();
-
+    initGlobalVariables();
     gpioInit();
     usartInit();
 
+    SysTick_Config(SystemCoreClock / 1000u);
+
     while (1)
     {
+        if (command_pending && ((int32_t)(ms_ticks - command_due_tick) >= 0))
+        {
+            processCommand();
+            rx_index = 0;
+            command_pending = false;
+        }
+
         __WFI(); // sleep until interrupt
     }
 }
